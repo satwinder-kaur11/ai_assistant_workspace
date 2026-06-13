@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+
+# Database
+*.db
+*.sqlite3
+
+# Env
+.env
+.env.local
+
+# ChromaDB/Data
+data/chroma/
+data/uploads/
+workmate/data/chroma/
+workmate/data/uploads/
+workmate/workmate.db

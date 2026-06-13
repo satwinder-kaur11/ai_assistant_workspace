@@ -39,3 +39,23 @@
 
 ### 6. Model Routing & Prompt Caching
 - **Strategy**: Route simple intents and memory extraction tasks to a smaller, faster model (e.g., Claude 3.5 Haiku) to save costs. Use Anthropic's Prompt Caching for large RAG contexts in final response generation to significantly lower Time To First Token (TTFT) and token costs. Implement multi-tenancy PII redaction prior to LLM calls.
+
+## Product Thinking
+
+### Question 1: Why do most AI workplace assistants fail?
+Most AI workplace assistants fail because they operate in isolation from the user's actual workflows and lack true context. Key reasons include:
+- **Lack of Actionability:** Many assistants are just chatbots that can summarize text but cannot execute actions (like creating a ticket or sending an email) on the user's behalf.
+- **Context Amnesia:** They treat every session as a blank slate. If an assistant doesn't remember a user's preferences, teammates, or past decisions, it becomes frustrating to use.
+- **Trust and Safety Issues:** Black-box execution without Human-In-The-Loop (HITL) guardrails leads to mistakes (e.g., sending an incorrect email or deleting records).
+- **Poor Integration:** A lack of deep integration into existing systems of record (Jira, Salesforce, Google Workspace) limits utility.
+
+### Question 2: How would you differentiate this solution from ChatGPT, Claude, and Notion AI?
+- **vs. ChatGPT / Claude:** While ChatGPT and Claude are generalized horizontal LLMs, WorkMate is a deeply integrated **Agentic Workspace Assistant**. It has a dedicated memory architecture (Semantic, Episodic, Preference) that persists across sessions. It also features an explicit Action Execution Layer with Human-In-The-Loop workflows, meaning it doesn't just generate text—it prepares concrete tasks and emails for user approval.
+- **vs. Notion AI:** Notion AI excels at text manipulation within documents. WorkMate differentiates itself by acting as an orchestrator across the entire "Work Operating System" (Tasks, Emails, Documents). It is intent-driven and capable of complex multi-step reasoning, retrieving past interactions, and taking external actions beyond simple document editing.
+
+### Question 3: If given three additional months, what would you build next and why?
+If given three more months, I would build:
+1. **Third-Party Integrations Layer:** Connect the `task_service` to Jira/Asana and `email_service` to Gmail/Outlook APIs. Without this, the assistant remains a silo.
+2. **Advanced Multi-Agent Collaboration:** Break down the single LangGraph agent into specialized sub-agents (e.g., a dedicated "Research Agent" for deep document analysis, a "Scheduling Agent" for calendar management). This improves reliability for complex tasks.
+3. **Proactive Assistance (Background Agents):** Shift from purely reactive (waiting for a prompt) to proactive. The system could scan incoming emails or documents asynchronously and surface proposed tasks to the "Pending Approvals" queue before the user even asks.
+4. **Graph-Based Memory (Knowledge Graph):** Upgrade the memory system from simple vector chunks to a Knowledge Graph (e.g., Neo4j). This would allow the AI to understand complex relationships (e.g., "Sarah manages the Engineering team, which owns Sprint 1").

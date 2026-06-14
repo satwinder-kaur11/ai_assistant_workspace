@@ -149,15 +149,23 @@ with st.sidebar:
         if _root not in sys.path:
             sys.path.insert(0, _root)
         from app.config import settings as _s
-        _key = (_s.ANTHROPIC_API_KEY or "").strip()
-        _has_key = bool(_key) and _key != "your-anthropic-api-key-here"
+        provider = _s.LLM_PROVIDER.lower()
+        if provider == "ollama":
+            _mode = "ollama"
+        elif provider == "anthropic":
+            _key = (_s.ANTHROPIC_API_KEY or "").strip()
+            _mode = "claude" if (bool(_key) and _key != "your-anthropic-api-key-here") else "rule-based"
+        else:
+            _mode = "rule-based"
     except Exception:
-        _has_key = False
+        _mode = "rule-based"
 
-    if _has_key:
-        st.success("🧠 AI Mode: **Claude** (full intelligence)")
+    if _mode == "ollama":
+        st.success("🦙 AI Mode: **Ollama** (Local LLM)")
+    elif _mode == "claude":
+        st.success("🧠 AI Mode: **Claude** (Full Intelligence)")
     else:
-        st.warning("⚙️ **Rule-based Mode** — no API key set.\nAll features work! Add `ANTHROPIC_API_KEY` to `.env` for AI responses.")
+        st.warning("⚙️ **Rule-based Mode** — no API key set.\nAll features work! Set `LLM_PROVIDER=ollama` or add `ANTHROPIC_API_KEY` to `.env` for AI responses.")
 
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []

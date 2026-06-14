@@ -22,26 +22,13 @@ from app.db.session import SessionLocal
 # Local fallback engine (no API key required)
 from app.agent import local_llm as local
 
+# Centralized LLM factory
+from app.agent.llm_factory import get_llm, has_active_llm
+
 logger = logging.getLogger(__name__)
 
-
 def _has_api_key() -> bool:
-    """Check if a valid Anthropic API key is configured."""
-    key = (settings.ANTHROPIC_API_KEY or "").strip()
-    return bool(key) and key != "your-anthropic-api-key-here"
-
-
-def get_llm(temperature: float = 0):
-    """Returns a configured ChatAnthropic instance (only if API key is set)."""
-    if not _has_api_key():
-        raise RuntimeError("No ANTHROPIC_API_KEY configured — using local fallback.")
-    from langchain_anthropic import ChatAnthropic
-    return ChatAnthropic(
-        model="claude-3-5-sonnet-20241022",
-        api_key=settings.ANTHROPIC_API_KEY,
-        temperature=temperature,
-        max_tokens=4096,
-    )
+    return has_active_llm()
 
 
 # ── Pydantic models for structured LLM output ──────────────────────────────
@@ -133,11 +120,31 @@ def execution(state: Dict[str, Any]) -> Dict[str, Any]:
             state["retrieved_context"] = "\n".join(r["content"] for r in results)
 
         elif intent == "task_creation":
-            tasks = create_tasks(query, tenant_id, user_id, db)
+            # Retrieve document context first for accurate task extraction
+            results, _ = search_documents(query, tenant_id, user_id)
+            if results:
+                source_text = "\n\n".join(
+                    f"[Source: {r['filename']}]\n{r['content']}" for r in results
+                )
+                logger.info(f"task_creation: Using RAG context from {len(results)} chunk(s)")
+            else:
+                source_text = query
+                logger.info("task_creation: No document context found, using raw query")
+            tasks = create_tasks(source_text, tenant_id, user_id, db)
             state["tool_outputs"] = {"tasks": tasks}
 
         elif intent == "email_draft":
-            draft = draft_email(query, tenant_id, user_id, db)
+            # Retrieve document context first for richer email drafting
+            results, _ = search_documents(query, tenant_id, user_id)
+            if results:
+                context = "\n\n".join(
+                    f"[Source: {r['filename']}]\n{r['content']}" for r in results
+                )
+                logger.info(f"email_draft: Using RAG context from {len(results)} chunk(s)")
+            else:
+                context = query
+                logger.info("email_draft: No document context found, using raw query")
+            draft = draft_email(context, tenant_id, user_id, db)
             state["tool_outputs"] = {"email": draft}
 
         # chitchat and multi_step fall through to response_generation directly

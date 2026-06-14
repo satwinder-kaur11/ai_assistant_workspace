@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings:
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")  # 'anthropic' or 'ollama'
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")  # 'local' or 'openai'
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -15,3 +17,4 @@ class Settings:
     RAG_CONFIDENCE_THRESHOLD = float(os.getenv("RAG_CONFIDENCE_THRESHOLD", "0.3"))
 
 settings = Settings()
+

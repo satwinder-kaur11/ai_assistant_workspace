@@ -6,10 +6,10 @@ from app.agent import local_llm as local
 
 logger = logging.getLogger(__name__)
 
+from app.agent.llm_factory import get_llm, has_active_llm
 
 def _has_api_key() -> bool:
-    key = (settings.ANTHROPIC_API_KEY or "").strip()
-    return bool(key) and key != "your-anthropic-api-key-here"
+    return has_active_llm()
 
 
 class MemoryItem(BaseModel):
@@ -28,16 +28,11 @@ def extract_memories(conversation_history: str) -> List[Dict[str, Any]]:
     Only returns memories above the MEMORY_IMPORTANCE_THRESHOLD.
     """
     if _has_api_key():
-        # ── Claude path ──────────────────────────────────────────────────
+        # ── LLM path ──────────────────────────────────────────────────
         try:
-            from langchain_anthropic import ChatAnthropic
             from langchain_core.prompts import PromptTemplate
 
-            llm = ChatAnthropic(
-                model="claude-3-5-sonnet-20241022",
-                api_key=settings.ANTHROPIC_API_KEY,
-                temperature=0,
-            )
+            llm = get_llm(temperature=0)
             structured_llm = llm.with_structured_output(MemoryExtractionResult)
             prompt = PromptTemplate.from_template(
                 "Extract any important semantic facts, episodic events, or user preferences from the following conversation.\n"

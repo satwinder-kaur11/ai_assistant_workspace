@@ -328,18 +328,81 @@ def extract_tasks(query: str) -> List[Dict[str, Any]]:
 # ── Email drafting ────────────────────────────────────────────────────────
 
 def draft_email(query: str) -> Dict[str, str]:
-    """Rule-based email draft generator."""
+    """Rule-based email draft generator.
+    Handles both short user queries AND full document context blobs from RAG.
+    """
     q = query
 
-    # Extract recipient
+    # ── Detect whether we received document context or a short user query ──
+    is_doc_context = len(q) > 300 or "[Source:" in q
+
+    if is_doc_context:
+        # ── Document-context mode: extract key info from the document ─────
+        # Strip [Source: ...] markers for cleaner parsing
+        clean = re.sub(r"\[Source:[^\]]+\]\n?", "", q).strip()
+
+        # Try to find an addressee in the document
+        to_match = re.search(
+            r"(?:to|from|cc|attendees?|participants?|team)[:\s]+"
+            r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+            clean,
+        )
+        recipient = to_match.group(1) if to_match else "the team"
+
+        # Try to find the project / topic name
+        project_match = re.search(
+            r"(?:project|re:|subject:|regarding|sprint|module)[:\s]+(.+?)(?:\n|\.|,)",
+            clean,
+            re.IGNORECASE,
+        )
+        topic = (
+            project_match.group(1).strip()[:70]
+            if project_match
+            else "the discussed topics"
+        )
+
+        # Pull out action sentences as key points
+        action_pat = (
+            r"\b(review|update|send|create|schedule|complete|prepare|finalize|"
+            r"submit|deploy|test|analyze|approve|deliver|assign|fix|implement|"
+            r"coordinate|discuss|plan|build|share|document)\b"
+        )
+        key_points = []
+        for line in clean.splitlines():
+            line = line.strip()
+            if len(line) > 20 and re.search(action_pat, line, re.IGNORECASE):
+                key_points.append(f"\u2022 {line.rstrip('.,;:')}")
+                if len(key_points) >= 4:
+                    break
+
+        subject = topic.rstrip(".,;:")
+        body = (
+            f"Hi {recipient},\n\n"
+            f"I hope this message finds you well.\n\n"
+            f"I'm writing to follow up on **{topic}**.\n\n"
+        )
+        if key_points:
+            body += "Key action items from our records:\n" + "\n".join(key_points) + "\n\n"
+        body += (
+            "Please let me know if you have any questions or need further clarification.\n\n"
+            "Best regards,\n"
+            "[Your Name]"
+        )
+
+        return {
+            "to": recipient,
+            "subject": subject,
+            "body": body,
+            "suggested_recipients": recipient,
+        }
+
+    # ── Short-query mode: original behaviour ─────────────────────────────
     to_match = re.search(r"\bto\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b", q)
     recipient = to_match.group(1) if to_match else "the recipient"
 
-    # Extract topic/subject
     about_match = re.search(r"\babout\s+(.+?)(?:\.|$)", q, re.IGNORECASE)
     topic = about_match.group(1).strip() if about_match else query
 
-    # Make a readable subject
     subject = topic[:60].capitalize()
     if not subject.endswith("."):
         subject = subject.rstrip(".,;:")
@@ -359,6 +422,7 @@ def draft_email(query: str) -> Dict[str, str]:
         "to": recipient,
         "subject": subject,
         "body": body,
+        "suggested_recipients": recipient,
     }
 
 

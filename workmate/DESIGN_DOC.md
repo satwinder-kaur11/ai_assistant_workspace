@@ -30,9 +30,9 @@ Enterprise AI adoption is heavily bottlenecked by data privacy concerns. The arc
 *   **Decision:** SQLite is used as the default relational database.
 *   **Trade-off:** SQLite requires zero configuration, meaning the application can be cloned and run instantly without spinning up Docker containers or database servers. The trade-off is that SQLite struggles with high concurrent write loads. In a multi-user production environment, this would become a bottleneck, requiring a migration to PostgreSQL (which the SQLAlchemy ORM easily supports via a `DB_URL` change).
 
-**Rule-Based Fallback vs. Guaranteed Intelligence**
-*   **Decision:** Implementing a regex/rule-based fallback engine (`local_llm.py`).
-*   **Trade-off:** To ensure system resilience, if the Anthropic API is unreachable and no local LLM is running, the system degrades to using hardcoded regex to detect intents and draft templates. The trade-off is that the system prioritizes *uptime* over *intelligence*. During a fallback event, the semantic understanding drops significantly, but the application avoids crashing.
+**Local LLM Inference vs. Cloud AI**
+*   **Decision:** Supporting local execution via Ollama (`llama3.2`) as the primary alternative to Cloud AI (Anthropic).
+*   **Trade-off:** When the Anthropic API key is omitted or the cloud service is unreachable, the system seamlessly routes execution to a local LLM rather than crashing or relying on hardcoded scripts. This guarantees the application continues to provide intelligent, contextual answers, task extraction, and email drafting without sending data off-device. The trade-off is that local models require sufficient user hardware (RAM/GPU) to run at speeds comparable to cloud providers, but the massive gain in data privacy and offline capability makes this the superior architectural choice. (Note: A secondary regex-based engine exists strictly to prevent 500 Server Errors if the local LLM daemon itself crashes).
 
 ---
 

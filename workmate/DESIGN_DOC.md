@@ -1,61 +1,61 @@
-# WorkMate Design Document
+# WorkMate AI: System Design Document
 
-## Architectural Decisions & Trade-offs
+This document outlines the architectural decisions, trade-offs, future improvements, and production considerations for the WorkMate AI Workspace Assistant.
 
-### 1. Vector Database: ChromaDB vs. Alternatives
-**Decision**: Used ChromaDB in Persistent local mode.
-**Trade-off**: ChromaDB is lightweight, runs locally without extra infrastructure, and provides sufficient performance for prototyping. Qdrant or Pinecone might offer better scalability for billions of vectors, but for a prototype, avoiding a separate Docker service for the vector DB significantly reduces setup friction.
+## 1. Architectural Decisions
 
-### 2. Memory System: Dual Storage
-**Decision**: Memories are stored in both ChromaDB and PostgreSQL.
-**Trade-off**: Storing in ChromaDB allows fast semantic retrieval. Storing in PostgreSQL allows for relational queries (e.g., fetching all memories for a user, tracking `last_accessed_at` for decay logic) and acts as the true source of record. Keeping them synchronized adds slight application complexity but provides the optimal retrieval capabilities.
+**State Machine Orchestration (LangGraph)**
+Instead of relying on rigid, linear LLM chains, the core agent is orchestrated using LangGraph as a cyclic state machine. This decision was made because an effective workspace assistant must handle complex routing. By separating the flow into distinct nodes (Intent Detection → Execution → Validation → Response), the system can dynamically route a user query to a specialized tool (like RAG or Email Drafting), validate the output, and even loop back if a tool fails, providing deterministic control over non-deterministic LLM outputs.
 
-### 3. Agent Orchestration: LangGraph vs. Pure Prompts
-**Decision**: Used LangGraph with explicit StateGraph and conditional edges.
-**Trade-off**: Pure prompt routing (e.g., using ReAct) is easier to setup but heavily relies on LLM determinism, which can fail. LangGraph allows explicit, deterministic routing (e.g., validation failure always routes to error handling). It is more verbose but significantly more reliable, observable, and maintainable for production.
+**Decoupled Client-Server Architecture**
+The system strictly separates the presentation layer (Streamlit) from the business logic layer (FastAPI), communicating exclusively via REST API. This ensures that the core AI engine is client-agnostic. The decision guarantees that if the product scales to a Chrome Extension, a Desktop App (Electron), or a native Mobile App, the entire LangGraph backend remains untouched.
 
-### 4. Background Tasks: FastAPI vs. Celery
-**Decision**: Used FastAPI `BackgroundTasks` for the prototype.
-**Trade-off**: Simplifies the prototype by eliminating the need for Redis/RabbitMQ. However, if the server restarts, pending tasks are lost. A true production system requires a distributed task queue.
+**Dual-Database Memory System**
+The architecture utilizes two distinct databases to handle different types of data:
+*   **ChromaDB (Vector Store):** Used for semantic retrieval. It handles the high-dimensional embeddings required for RAG (Retrieval-Augmented Generation) and semantic memory searches.
+*   **SQLite (Relational Store):** Used for structured logging, user preferences, and managing the state of Human-in-the-Loop (HITL) actions via the `ActionLog` table.
 
-## Scaling Plan for 100K Users / 10M Docs / 50M Memories
+**Local-First & Privacy-Centric Design**
+Enterprise AI adoption is heavily bottlenecked by data privacy concerns. The architecture was specifically designed to support local, air-gapped execution. By supporting local embeddings (`SentenceTransformers`) and local LLM inference (`Ollama`), users can process highly sensitive internal documents without sending data to third-party cloud providers like OpenAI or Anthropic.
 
-### 1. Vector Store Sharding & Migration
-- **Strategy**: Migrate from local ChromaDB to a managed vector database (e.g., Qdrant, Milvus, or Pinecone). Shard the collections by `tenant_id`.
-- **Why**: 10M documents require robust HNSW indexing and memory management that standalone local Chroma cannot easily distribute across multiple nodes.
+---
 
-### 2. Async Ingestion Pipeline
-- **Strategy**: Introduce a robust task queue (Celery or Temporal) backed by Redis/RabbitMQ.
-- **Why**: Document parsing and embedding are compute-intensive. Moving them to dedicated worker nodes prevents API saturation and ensures reliable retries on failures.
+## 2. Trade-offs
 
-### 3. Relational Database Scaling
-- **Strategy**: Move from SQLite to a highly available managed PostgreSQL instance (e.g., AWS Aurora). Implement read replicas to offload heavy read loads (e.g., fetching documents or traces). Add connection pooling (PgBouncer).
+**Streamlit vs. React/Next.js**
+*   **Decision:** Streamlit was chosen for the frontend.
+*   **Trade-off:** Streamlit allowed for incredibly rapid prototyping, enabling the entire UI (including chat, file uploads, and data tables) to be built in hours using only Python. The trade-off is a lack of deep UI customization and sub-optimal state management, as Streamlit re-runs the entire script top-to-bottom on every user interaction, which can cause minor latency compared to a highly optimized React SPA.
 
-### 4. Embedding Cache and Batch Optimization
-- **Strategy**: Implement Redis caching for embeddings of common/repeated queries. Batch embeddings during ingestion (e.g., process 100 chunks per API call) instead of processing chunk-by-chunk to maximize throughput.
+**SQLite vs. PostgreSQL**
+*   **Decision:** SQLite is used as the default relational database.
+*   **Trade-off:** SQLite requires zero configuration, meaning the application can be cloned and run instantly without spinning up Docker containers or database servers. The trade-off is that SQLite struggles with high concurrent write loads. In a multi-user production environment, this would become a bottleneck, requiring a migration to PostgreSQL (which the SQLAlchemy ORM easily supports via a `DB_URL` change).
 
-### 5. Memory Archival (Cold Storage)
-- **Strategy**: Implement a cron worker that checks the `last_accessed_at` and `importance_score` fields in the `Memory` table. Memories that are rarely accessed and have low importance can be archived to cold storage (e.g., S3 + Athena) and removed from the active vector index to reduce latency and memory bloat.
+**Rule-Based Fallback vs. Guaranteed Intelligence**
+*   **Decision:** Implementing a regex/rule-based fallback engine (`local_llm.py`).
+*   **Trade-off:** To ensure system resilience, if the Anthropic API is unreachable and no local LLM is running, the system degrades to using hardcoded regex to detect intents and draft templates. The trade-off is that the system prioritizes *uptime* over *intelligence*. During a fallback event, the semantic understanding drops significantly, but the application avoids crashing.
 
-### 6. Model Routing & Prompt Caching
-- **Strategy**: Route simple intents and memory extraction tasks to a smaller, faster model (e.g., Claude 3.5 Haiku) to save costs. Use Anthropic's Prompt Caching for large RAG contexts in final response generation to significantly lower Time To First Token (TTFT) and token costs. Implement multi-tenancy PII redaction prior to LLM calls.
+---
 
-## Product Thinking
+## 3. Future Improvements
 
-### Question 1: Why do most AI workplace assistants fail?
-Most AI workplace assistants fail because they operate in isolation from the user's actual workflows and lack true context. Key reasons include:
-- **Lack of Actionability:** Many assistants are just chatbots that can summarize text but cannot execute actions (like creating a ticket or sending an email) on the user's behalf.
-- **Context Amnesia:** They treat every session as a blank slate. If an assistant doesn't remember a user's preferences, teammates, or past decisions, it becomes frustrating to use.
-- **Trust and Safety Issues:** Black-box execution without Human-In-The-Loop (HITL) guardrails leads to mistakes (e.g., sending an incorrect email or deleting records).
-- **Poor Integration:** A lack of deep integration into existing systems of record (Jira, Salesforce, Google Workspace) limits utility.
+**True API Execution Integrations**
+Currently, the Human-in-the-Loop (HITL) system safely intercepts dangerous actions (like sending emails or creating tasks) and logs them as "Pending Approvals" in the database. The most critical next step is wiring the "Approve" button to execute actual external API calls (e.g., the Gmail API for sending the draft, or the Jira/Linear API for posting the task).
 
-### Question 2: How would you differentiate this solution from ChatGPT, Claude, and Notion AI?
-- **vs. ChatGPT / Claude:** While ChatGPT and Claude are generalized horizontal LLMs, WorkMate is a deeply integrated **Agentic Workspace Assistant**. It has a dedicated memory architecture (Semantic, Episodic, Preference) that persists across sessions. It also features an explicit Action Execution Layer with Human-In-The-Loop workflows, meaning it doesn't just generate text—it prepares concrete tasks and emails for user approval.
-- **vs. Notion AI:** Notion AI excels at text manipulation within documents. WorkMate differentiates itself by acting as an orchestrator across the entire "Work Operating System" (Tasks, Emails, Documents). It is intent-driven and capable of complex multi-step reasoning, retrieving past interactions, and taking external actions beyond simple document editing.
+**Proactive Background Agents**
+The current paradigm is purely reactive: the user speaks, the agent responds. Future iterations will introduce background cron-agents that monitor specific environments (e.g., watching a designated Slack channel or a local incoming folder) and proactively trigger LangGraph workflows to stage task lists or draft summaries before the user even asks.
 
-### Question 3: If given three additional months, what would you build next and why?
-If given three more months, I would build:
-1. **Third-Party Integrations Layer:** Connect the `task_service` to Jira/Asana and `email_service` to Gmail/Outlook APIs. Without this, the assistant remains a silo.
-2. **Advanced Multi-Agent Collaboration:** Break down the single LangGraph agent into specialized sub-agents (e.g., a dedicated "Research Agent" for deep document analysis, a "Scheduling Agent" for calendar management). This improves reliability for complex tasks.
-3. **Proactive Assistance (Background Agents):** Shift from purely reactive (waiting for a prompt) to proactive. The system could scan incoming emails or documents asynchronously and surface proposed tasks to the "Pending Approvals" queue before the user even asks.
-4. **Graph-Based Memory (Knowledge Graph):** Upgrade the memory system from simple vector chunks to a Knowledge Graph (e.g., Neo4j). This would allow the AI to understand complex relationships (e.g., "Sarah manages the Engineering team, which owns Sprint 1").
+**Advanced Document Parsing (Vision Models)**
+The current RAG pipeline uses standard text extraction (`PyPDF2`), which often destroys complex formatting like tables, columns, and charts. Upgrading the ingestion pipeline to use Vision-Language Models (VLMs) or advanced parsers (like LlamaParse) will retain structural fidelity, dramatically improving the accuracy of document-based QA.
+
+---
+
+## 4. Production Considerations
+
+**Security, Authentication, and Multi-Tenancy**
+While the database schema natively supports `tenant_id` to separate data between organizations, the current prototype assumes these IDs are passed harmlessly from the frontend. For production, the FastAPI backend must be secured behind an Identity Provider (Auth0, AWS Cognito, etc.). The `user_id` and `tenant_id` must be cryptographically extracted and verified from incoming JWT (JSON Web Tokens) headers to prevent privilege escalation.
+
+**Asynchronous Task Queues**
+Operations like document embedding (chunking large PDFs and writing to ChromaDB) and background memory extraction are currently handled using FastAPI's lightweight `BackgroundTasks`. In a production environment with heavy traffic, these CPU-intensive operations would block API workers. They must be offloaded to a dedicated distributed task queue (such as Celery with RabbitMQ, or Redis Queue) running on separate worker nodes.
+
+**Enterprise Observability**
+While the prototype includes basic `@trace_node` logging for debugging, a production AI system requires deep, token-level observability. The LangGraph orchestration must be hooked into an enterprise telemetry system (like LangSmith or Datadog) to monitor LLM hallucination rates, exact token costs per tenant, and latency bottlenecks at the granular node level.

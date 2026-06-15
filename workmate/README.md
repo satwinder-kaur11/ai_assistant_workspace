@@ -4,22 +4,75 @@ WorkMate is a production-quality, scoped prototype for an AI Workspace Assistant
 
 ## Architectures
 
-### 1. High-Level Architecture
+### 1. Full System Architecture
 ```mermaid
 graph TD
-    UI[Streamlit Frontend] -->|REST API| API[FastAPI Backend]
-    API --> Agent[LangGraph Agent Orchestrator]
-    Agent --> Tools[Agent Tools]
-    Tools --> RAG[RAG Service]
-    Tools --> MemorySvc[Memory Service]
-    Tools --> TaskSvc[Task Service]
-    Tools --> EmailSvc[Email Service]
+    %% Define Styles
+    classDef frontend fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff
+    classDef backend fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff
+    classDef agent fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff
+    classDef db fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff
+    classDef llm fill:#ef4444,stroke:#b91c1c,stroke-width:2px,color:#fff
+
+    %% Components
+    User((User))
+    UI[Streamlit Frontend UI]:::frontend
+    API[FastAPI Backend]:::backend
     
-    RAG --> Chroma[(ChromaDB Vector Store)]
-    MemorySvc --> Chroma
-    MemorySvc --> Postgres[(PostgreSQL/SQLite)]
-    TaskSvc --> Postgres
-    EmailSvc --> Postgres
+    %% LangGraph Orchestrator
+    subgraph "LangGraph Agent Orchestrator"
+        Intent[Intent Detection]:::agent
+        Execution[Tool Execution]:::agent
+        Response[Response Generation]:::agent
+    end
+    
+    %% Services
+    subgraph "Backend Services"
+        RAG[RAG Service]:::backend
+        TaskServ[Task Service]:::backend
+        EmailServ[Email Service]:::backend
+        MemServ[Memory Service]:::backend
+    end
+    
+    %% Data & Models
+    SQLite[(SQLite Database\nLogs & Memory)]:::db
+    Chroma[(ChromaDB\nVector Search)]:::db
+    LLM{{LLM Engine\nOllama / Anthropic}}:::llm
+
+    %% Forward Connections
+    User -->|Prompts & Files| UI
+    UI -->|REST API Calls| API
+    
+    API -->|Sends Query| Intent
+    Intent -->|Decides Routing| Execution
+    Execution -->|Calls Service| RAG
+    Execution -->|Calls Service| TaskServ
+    Execution -->|Calls Service| EmailServ
+    Execution -->|Calls Service| MemServ
+    
+    %% Service DB interactions
+    RAG <-->|Semantic Search| Chroma
+    MemServ <-->|CRUD Operations| SQLite
+    TaskServ -->|Save Pending Action| SQLite
+    EmailServ -->|Save Pending Action| SQLite
+    MemServ <-->|Embeddings| Chroma
+    
+    %% LLM Interactions
+    RAG -.->|Generate Context| LLM
+    TaskServ -.->|Extract| LLM
+    EmailServ -.->|Draft| LLM
+    Intent -.->|Classify| LLM
+    Response -.->|Synthesize| LLM
+    
+    %% Return flow back up to User
+    RAG -->|Context| Response
+    MemServ -->|Memories| Response
+    TaskServ -->|Success Status| Response
+    EmailServ -->|Success Status| Response
+    
+    Response -->|Final AI Answer| API
+    API -->|API Responses| UI
+    UI -->|Visual Output| User
 ```
 
 ### 2. Document Processing Pipeline
@@ -52,13 +105,13 @@ stateDiagram-v2
 graph TD
     Chat[Chat Completion] --> Extractor[LLM Memory Extractor]
     Extractor -->|Importance > Threshold| Router{Threshold Check}
-    Router -->|Passes| Postgres[(PostgreSQL: Source of Truth)]
+    Router -->|Passes| SQLite[(SQLite: Source of Truth)]
     Router -->|Passes| Embedder[Embed Content]
     Embedder --> Chroma[(ChromaDB: Semantic Search)]
     
     Query[User Query] --> Retriever[Memory Retriever]
     Retriever --> Chroma
-    Retriever --> Postgres
+    Retriever --> SQLite
 ```
 
 ## Setup Instructions
@@ -93,7 +146,7 @@ graph TD
    ```
 
 ## Assumptions
-- Uses SQLite as the default relational DB for ease of local setup; configurable to Postgres via `DB_URL`.
+- Uses SQLite as the relational database for ease of local setup, ensuring zero-configuration deployment.
 - Local embeddings (`sentence-transformers/all-MiniLM-L6-v2`) are used by default to save API costs.
 - The user uses a single tenant for testing the prototype UI, though the backend supports multiple tenants.
 - All documents uploaded through the UI without an explicit user selection are considered tenant-shared (`user_id = None`).
@@ -105,7 +158,7 @@ graph TD
 - Document parsing is basic; complex PDFs with multi-column layouts might lose structural fidelity.
 
 ## Bonus Features Mapping
-- **Full Long-Term Memory:** Implemented via `app/memory/`. Dual storage in Chroma (semantic) and SQLite/Postgres (relational, tracking `last_accessed_at` and importance).
+- **Full Long-Term Memory:** Implemented via `app/memory/`. Dual storage in Chroma (semantic) and SQLite (relational, tracking `last_accessed_at` and importance).
 - **Human-In-The-Loop (Safety):** Implemented via `app/safety/guardrails.py` and the "Pending Approvals" Streamlit tab. Actions like `create_tasks` and `draft_email` generate `pending_approval` entries in the `ActionLog` table.
 - **Observability:** Wrapped LangGraph nodes using `@trace_node` in `app/observability/tracing.py`. Results are viewable in the "Agent Trace (Debug)" tab in Streamlit.
 

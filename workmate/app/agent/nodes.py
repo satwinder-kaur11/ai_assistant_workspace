@@ -390,25 +390,53 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def error_handling(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Gracefully handle validation failures and tool errors."""
+    """
+    Gracefully handle validation failures and tool errors.
+    Increments retry_count so the graph can decide whether to retry
+    via the supervisor or give up and return a final error message.
+    """
     logger.info("Node: error_handling")
     err = state.get("error_message", "An unknown error occurred.")
-    intent = state.get("intent", "")
 
-    if "Retrieval failure" in err or "low confidence" in err.lower():
+    # ── Increment retry counter ──────────────────────────────────────────
+    retry_count = state.get("retry_count", 0) + 1
+    max_retries = state.get("max_retries", 3)
+    state["retry_count"] = retry_count
+
+    if retry_count <= max_retries:
+        # Still have retries left — clear the error so the graph can loop back
+        logger.warning(
+            f"error_handling: attempt {retry_count}/{max_retries} failed — "
+            f"retrying via supervisor. Error: {err}"
+        )
+        # Reset transient error state so supervisor gets a clean slate
+        state["error_message"]      = None
+        state["validation_passed"]  = True
+        state["retrieved_context"]  = ""
+        state["tool_outputs"]       = {}
+        # Keep final_response empty so the user does not see a partial error
+        state["final_response"] = ""
+        return state
+
+    # ── All retries exhausted — return a human-readable error message ─────
+    logger.error(
+        f"error_handling: all {max_retries} retries exhausted. "
+        f"Returning terminal error to user."
+    )
+    if "Retrieval failure" in err or "low confidence" in (err or "").lower():
         state["final_response"] = (
-            "🔍 I couldn't find relevant information in your documents.\n"
+            "I couldn't find relevant information in your documents.\n"
             "Try uploading a document that covers this topic, then ask again."
         )
-    elif "empty results" in err.lower():
+    elif "empty results" in (err or "").lower():
         state["final_response"] = (
             "I wasn't able to complete that action — the required context was missing.\n"
             "Could you provide more detail?"
         )
     else:
         state["final_response"] = (
-            f"⚠️ Something went wrong while processing your request.\n"
-            f"*Details:* {err}\n\n"
+            f"Something went wrong after {max_retries} attempts.\n"
+            f"Details: {err}\n\n"
             "Please try rephrasing or try again in a moment."
         )
 

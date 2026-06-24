@@ -8,9 +8,11 @@ Architecture:
     Supervisor
       ├─► research_agent     (Document Q&A / Memory Recall)
       ├─► productivity_agent (Task Creation / Email Drafting)
-      └─► chitchat_agent     (falls through directly to response_generation)
+      └─► chitchat_agent     (falls through directly to validation)
            └─► validation → guardrail_check ─► response_generation
                          └─► error_handling
+                               ├─► [retries left] → supervisor (loop back)
+                               └─► [exhausted]    → END
 """
 
 from typing import Dict, Any
@@ -52,6 +54,21 @@ def _route_after_validation(state: Dict[str, Any]) -> str:
     return "response_generation"
 
 
+def _route_after_error(state: Dict[str, Any]) -> str:
+    """
+    After error_handling, decide whether to retry (loop back to supervisor)
+    or give up and send the terminal error message to the user.
+
+    error_handling already incremented retry_count. If it reset error_message
+    to None that means retries remain; otherwise retries are exhausted.
+    """
+    if state.get("error_message") is None:
+        # error_handling cleared the error — retries remain, loop back
+        return "supervisor"
+    # error_message is still set — retries exhausted, send final error
+    return "response_generation"
+
+
 # ── Graph builder ────────────────────────────────────────────────────────────
 
 def build_graph():
@@ -77,7 +94,7 @@ def build_graph():
     workflow.add_conditional_edges("validation",         _route_after_validation)
     workflow.add_edge("guardrail_check",     "response_generation")
     workflow.add_edge("response_generation", END)
-    workflow.add_edge("error_handling",      END)
+    # ── Retry loop: error_handling → supervisor (if retries remain) or END ───
+    workflow.add_conditional_edges("error_handling",  _route_after_error)
 
     return workflow.compile()
-

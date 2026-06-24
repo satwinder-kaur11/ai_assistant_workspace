@@ -15,6 +15,10 @@ class AgentState(TypedDict, total=False):
     # Multi-Agent Routing: which sub-agent the supervisor selected
     next_agent: str  # research_agent | productivity_agent | chitchat_agent
 
+    # Fault-tolerance: retry loop counter
+    retry_count: int   # how many retries have been attempted so far
+    max_retries: int   # maximum retries allowed before giving up (default 3)
+
     # Core context
     tenant_id: int
     user_id: int

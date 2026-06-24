@@ -1,3 +1,9 @@
+"""
+app/config.py
+
+Loads environment variables (like API keys) from the .env file using Pydantic Settings.
+"""
+
 import os
 from dotenv import load_dotenv
 
@@ -17,4 +23,5 @@ class Settings:
     RAG_CONFIDENCE_THRESHOLD = float(os.getenv("RAG_CONFIDENCE_THRESHOLD", "0.3"))
 
 settings = Settings()
-
+# loads the environment variables from the .env file and creates an instance of the Settings class,
+#  which can be imported and used throughout the application to access configuration values.

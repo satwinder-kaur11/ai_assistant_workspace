@@ -1,3 +1,9 @@
+"""
+app/vectorstore/chroma_client.py
+
+Initializes the local ChromaDB connection for storing and searching vector embeddings.
+"""
+
 import os
 import chromadb
 from chromadb.config import Settings as ChromaSettings

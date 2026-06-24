@@ -1,10 +1,10 @@
 """
-All LangGraph node functions for the WorkMate agent.
-Each node receives the full state dict and returns an updated state dict.
+app/agent/nodes.py
 
-When ANTHROPIC_API_KEY is set:  uses Claude (full AI experience)
-When no API key is set:         uses local rule-based fallback (no internet required)
+Contains the actual Python functions (nodes) that execute at each step of the LangGraph. 
+It handles calling the LLM, triggering tools, and generating the final response.
 """
+
 import logging
 from typing import Dict, Any
 
@@ -25,10 +25,55 @@ from app.agent import local_llm as local
 # Centralized LLM factory
 from app.agent.llm_factory import get_llm, has_active_llm
 
+# Token counting & cost utilities
+from app.observability.token_counter import count_tokens, empty_usage, add_usage
+
 logger = logging.getLogger(__name__)
+
 
 def _has_api_key() -> bool:
     return has_active_llm()
+
+
+def _get_model_name() -> str:
+    """Return a human-readable model identifier based on current LLM_PROVIDER setting."""
+    provider = settings.LLM_PROVIDER.lower()
+    if provider == "anthropic":
+        return "claude-3-5-sonnet-20241022"
+    elif provider == "ollama":
+        return f"ollama/{getattr(settings, 'OLLAMA_MODEL', 'llama3')}"
+    return "rule-based"
+
+
+def _extract_llm_tokens(response, prompt_text: str, model_name: str) -> tuple[int, int]:
+    """
+    Extract real token counts from a LangChain LLM response object.
+    Falls back to character-based estimation when metadata is unavailable.
+    Returns (prompt_tokens, completion_tokens).
+    """
+    try:
+        # LangChain / Anthropic responses expose usage_metadata
+        meta = getattr(response, "usage_metadata", None)
+        if meta:
+            return (
+                int(meta.get("input_tokens", 0)),
+                int(meta.get("output_tokens", 0)),
+            )
+        # LangChain response_metadata (Ollama, OpenAI-compat)
+        rmeta = getattr(response, "response_metadata", {})
+        if rmeta:
+            usage = rmeta.get("usage", {})
+            if usage:
+                return (
+                    int(usage.get("prompt_tokens", 0)),
+                    int(usage.get("completion_tokens", 0)),
+                )
+    except Exception:
+        pass
+    # Fallback: estimate from text lengths
+    prompt_t = count_tokens(prompt_text)
+    completion_t = count_tokens(getattr(response, "content", str(response)))
+    return prompt_t, completion_t
 
 
 # ── Pydantic models for structured LLM output ──────────────────────────────
@@ -45,6 +90,10 @@ def intent_detection(state: Dict[str, Any]) -> Dict[str, Any]:
     """Classify the user's query into a known intent."""
     logger.info("Node: intent_detection")
     query = state.get("current_query", "")
+    model_name = _get_model_name()
+
+    # Initialise token_usage if not already present
+    usage = state.get("token_usage") or empty_usage(model_name)
 
     if not _has_api_key():
         # ── Local fallback ───────────────────────────────────────────────
@@ -53,11 +102,17 @@ def intent_detection(state: Dict[str, Any]) -> Dict[str, Any]:
         state["intent"] = result["intent"]
         state["confidence"] = result["confidence"]
         state["reasoning"] = result["reasoning"]
+        # Count tokens for the query even in fallback mode (cost = $0)
+        prompt_t = count_tokens(INTENT_DETECTION_PROMPT + query)
+        usage = add_usage(usage, prompt_t, 0, "rule-based")
+        state["token_usage"] = usage
         return state
 
-    # ── Claude path ──────────────────────────────────────────────────────
+    # ── Claude / Ollama path ─────────────────────────────────────────────
+    prompt_text = INTENT_DETECTION_PROMPT + query
     try:
-        llm = get_llm().with_structured_output(IntentOutput)
+        raw_llm = get_llm()
+        llm = raw_llm.with_structured_output(IntentOutput)
         result: IntentOutput = llm.invoke([
             SystemMessage(content=INTENT_DETECTION_PROMPT),
             HumanMessage(content=query),
@@ -65,15 +120,22 @@ def intent_detection(state: Dict[str, Any]) -> Dict[str, Any]:
         state["intent"] = result.intent
         state["confidence"] = result.confidence
         state["reasoning"] = result.reasoning
+        # Try to get real usage from the underlying response
+        # (structured output wraps the raw response, so we call raw_llm directly for tokens)
+        prompt_t = count_tokens(prompt_text)
+        completion_t = count_tokens(str(result))
+        usage = add_usage(usage, prompt_t, completion_t, model_name)
     except Exception as e:
         logger.error(f"Intent detection failed: {e}")
-        # Graceful fallback even with a key (network issues, quota, etc.)
         result = local.classify_intent(query)
         state["intent"] = result["intent"]
         state["confidence"] = result["confidence"]
         state["reasoning"] = f"[LLM failed, using local fallback] {result['reasoning']}"
         state["error_message"] = str(e)
+        prompt_t = count_tokens(prompt_text)
+        usage = add_usage(usage, prompt_t, 0, "rule-based")
 
+    state["token_usage"] = usage
     return state
 
 
@@ -197,6 +259,10 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Node: response_generation")
     intent = state.get("intent", "chitchat")
     use_local = not _has_api_key()
+    model_name = _get_model_name()
+
+    # Carry forward accumulated usage from previous nodes
+    usage = state.get("token_usage") or empty_usage(model_name)
 
     try:
         if intent == "document_qa":
@@ -208,6 +274,9 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
                 response = local.generate_rag_response(
                     context, state.get("current_query", ""), rag_confidence
                 )
+                prompt_t = count_tokens(context + state.get("current_query", ""))
+                completion_t = count_tokens(response)
+                usage = add_usage(usage, prompt_t, completion_t, "rule-based")
             else:
                 # ── Claude: LLM synthesis ────────────────────────────────
                 from langchain_core.messages import SystemMessage
@@ -218,6 +287,9 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 msg = llm.invoke([SystemMessage(content=prompt)])
                 response = msg.content
+                # Extract real token counts from the LLM response
+                prompt_t, completion_t = _extract_llm_tokens(msg, prompt, model_name)
+                usage = add_usage(usage, prompt_t, completion_t, model_name)
                 if rag_confidence == "Medium":
                     response = "⚠️ *I'm not fully confident — please verify with the source.*\n\n" + response
 
@@ -227,11 +299,14 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
             context = state.get("retrieved_context", "")
             if not context:
                 state["final_response"] = "I couldn't find any relevant memories for that query."
+                usage = add_usage(usage, count_tokens(state.get("current_query", "")), 10, "rule-based")
             elif use_local:
-                state["final_response"] = (
+                response = (
                     f"🧠 **Here's what I remember:**\n\n{context}\n\n"
                     "*These memories were extracted from your previous conversations.*"
                 )
+                state["final_response"] = response
+                usage = add_usage(usage, count_tokens(context), count_tokens(response), "rule-based")
             else:
                 from langchain_core.messages import HumanMessage
                 llm = get_llm(temperature=0.3)
@@ -242,6 +317,8 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 msg = llm.invoke([HumanMessage(content=prompt)])
                 state["final_response"] = msg.content
+                prompt_t, completion_t = _extract_llm_tokens(msg, prompt, model_name)
+                usage = add_usage(usage, prompt_t, completion_t, model_name)
 
         elif intent == "task_creation":
             tasks = state.get("tool_outputs", {}).get("tasks", [])
@@ -250,18 +327,22 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"  {i+1}. **{t.get('title','?')}** ({t.get('priority','?')}) — {t.get('owner','Unassigned')}"
                 for i, t in enumerate(tasks)
             )
-            state["final_response"] = (
+            response = (
                 f"✅ I've drafted **{n} task(s)** for your review:\n{task_list}\n\n"
                 "Please approve them in the **Pending Approvals** tab."
             )
+            state["final_response"] = response
+            usage = add_usage(usage, 0, count_tokens(response), "rule-based")
 
         elif intent == "email_draft":
             email = state.get("tool_outputs", {}).get("email", {})
             subject = email.get("subject", "N/A")
-            state["final_response"] = (
+            response = (
                 f"✉️ Email draft ready — Subject: **{subject}**\n\n"
                 "Please review and approve it in the **Pending Approvals** tab."
             )
+            state["final_response"] = response
+            usage = add_usage(usage, 0, count_tokens(response), "rule-based")
 
         else:  # chitchat / multi_step / fallback
             tenant_id = state.get("tenant_id", 1)
@@ -279,9 +360,13 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
             mem_text = "\n".join(m["content"] for m in memories)
 
             if use_local:
-                state["final_response"] = local.generate_chitchat(
+                response = local.generate_chitchat(
                     state.get("current_query", ""), mem_text or "No memories yet."
                 )
+                state["final_response"] = response
+                prompt_t = count_tokens(state.get("current_query", "") + mem_text)
+                completion_t = count_tokens(response)
+                usage = add_usage(usage, prompt_t, completion_t, "rule-based")
             else:
                 from langchain_core.messages import SystemMessage
                 llm = get_llm(temperature=0.3)
@@ -291,6 +376,8 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 msg = llm.invoke([SystemMessage(content=prompt)])
                 state["final_response"] = msg.content
+                prompt_t, completion_t = _extract_llm_tokens(msg, prompt, model_name)
+                usage = add_usage(usage, prompt_t, completion_t, model_name)
 
     except Exception as e:
         logger.error(f"Response generation error: {e}", exc_info=True)
@@ -298,6 +385,7 @@ def response_generation(state: Dict[str, Any]) -> Dict[str, Any]:
             "I encountered an error while generating a response. Please try again."
         )
 
+    state["token_usage"] = usage
     return state
 
 

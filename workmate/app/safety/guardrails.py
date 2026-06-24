@@ -1,3 +1,9 @@
+"""
+app/safety/guardrails.py
+
+Manages the Human-in-the-Loop workflow. Handles approving or rejecting pending actions in the database.
+"""
+
 import logging
 from sqlalchemy.orm import Session
 from app.db.models import ActionLog, ActionStatus, Task, TaskSource

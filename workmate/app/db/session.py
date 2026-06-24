@@ -1,3 +1,11 @@
+"""
+app/db/session.py
+
+Establishes the connection to the SQLite database using SQLAlchemy and provides a session generator.
+"""
+
+# Manages the connection to the SQLite database.
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings

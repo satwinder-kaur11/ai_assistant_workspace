@@ -1,7 +1,10 @@
 """
-WorkMate Streamlit Frontend
-Tabs: Chat | Pending Approvals | Memory | Tasks | Debug Trace
+frontend/streamlit_app.py
+
+This file contains the entire Streamlit User Interface. It handles all visual rendering 
+(Chat, Memory, Approvals, Cost Analytics) and makes REST API calls to the FastAPI backend.
 """
+
 import os
 import sys
 import json
@@ -10,7 +13,7 @@ import requests
 import pandas as pd
 import streamlit as st
 
-# ── Path setup ─────────────────────────────────────────────────────────────
+# Path setup 
 FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(FRONTEND_DIR)
 if ROOT_DIR not in sys.path:
@@ -19,7 +22,7 @@ if ROOT_DIR not in sys.path:
 API_URL   = os.getenv("API_URL", "http://localhost:8000")
 DB_PATH   = os.path.join(ROOT_DIR, "workmate.db")
 
-# ── Page config ────────────────────────────────────────────────────────────
+#  Page config 
 st.set_page_config(
     page_title="WorkMate AI",
     page_icon="🤖",
@@ -81,14 +84,15 @@ def api_get(path: str, params=None):
     except requests.exceptions.ConnectionError:
         return None
 
-# ── Session state defaults ─────────────────────────────────────────────────
+# ── Session state defaults ────────────────────────────────────────────────
 if "messages"        not in st.session_state: st.session_state.messages = []
 if "conversation_id" not in st.session_state: st.session_state.conversation_id = None
 if "last_trace"      not in st.session_state: st.session_state.last_trace = {}
+if "session_tokens"  not in st.session_state: st.session_state.session_tokens = 0
+if "session_cost"    not in st.session_state: st.session_state.session_cost = 0.0
 
-# ═══════════════════════════════════════════════════════════════════════════
+
 # SIDEBAR
-# ═══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## 🤖 WorkMate AI")
     st.markdown("*Your AI Workspace Assistant*")
@@ -171,13 +175,15 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.conversation_id = None
         st.session_state.last_trace = {}
+        st.session_state.session_tokens = 0
+        st.session_state.session_cost = 0.0
         st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN TABS
 # ═══════════════════════════════════════════════════════════════════════════
-tab_chat, tab_approvals, tab_memory, tab_tasks, tab_debug = st.tabs([
-    "💬 Chat", "🔔 Pending Approvals", "🧠 Memory", "✅ Tasks", "🔍 Debug Trace"
+tab_chat, tab_approvals, tab_memory, tab_tasks, tab_costs, tab_debug = st.tabs([
+    "💬 Chat", "🔔 Pending Approvals", "🧠 Memory", "✅ Tasks", "💰 Cost Analytics", "🔍 Debug Trace"
 ])
 
 # ── TAB 1: CHAT ─────────────────────────────────────────────────────────────
@@ -218,18 +224,59 @@ with tab_chat:
                 data = resp.json()
                 st.session_state.conversation_id = data["conversation_id"]
                 response_text = data["response"]
+                # Token & cost data from backend
+                p_tok   = data.get("prompt_tokens", 0)
+                c_tok   = data.get("completion_tokens", 0)
+                t_tok   = data.get("total_tokens", 0)
+                cost    = data.get("cost_usd", 0.0)
+                mdl     = data.get("model_name", "rule-based")
                 meta = {
-                    "intent":        data.get("intent"),
-                    "confidence":    data.get("confidence") or 0.0,
-                    "rag_confidence":data.get("rag_confidence"),
+                    "intent":         data.get("intent"),
+                    "confidence":     data.get("confidence") or 0.0,
+                    "rag_confidence": data.get("rag_confidence"),
+                    "prompt_tokens":  p_tok,
+                    "completion_tokens": c_tok,
+                    "total_tokens":   t_tok,
+                    "cost_usd":       cost,
+                    "model_name":     mdl,
                 }
                 st.session_state.last_trace = meta
+                # Accumulate session totals
+                st.session_state.session_tokens += t_tok
+                st.session_state.session_cost   += cost
+
                 st.markdown(response_text)
+
+                # ── Inline cost badge ─────────────────────────────────────
+                cost_color = "#4ade80" if cost == 0 else "#facc15"
+                cost_str   = f"${cost:.6f}" if cost > 0 else "$0.0000 (free)"
+                st.markdown(
+                    f"""
+                    <div style="
+                        display:inline-flex; align-items:center; gap:10px;
+                        background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1);
+                        border-radius:20px; padding:4px 12px; margin-top:6px;
+                        font-size:0.78rem; color:#94a3b8;
+                    ">
+                        <span>🪙 <b style='color:{cost_color}'>{cost_str}</b></span>
+                        <span>|</span>
+                        <span>↑ {p_tok} prompt</span>
+                        <span>↓ {c_tok} completion</span>
+                        <span>|</span>
+                        <span>⚡ {t_tok} total tokens</span>
+                        <span>|</span>
+                        <span style='color:#7c3aed'>{mdl}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
                 with st.expander("ℹ️ Intent info", expanded=False):
                     cols = st.columns(3)
                     cols[0].metric("Intent",     meta["intent"] or "–")
                     cols[1].metric("Confidence", f"{meta['confidence']:.0%}")
                     cols[2].metric("RAG Conf",   meta["rag_confidence"] or "–")
+
                 st.session_state.messages.append({
                     "role": "assistant", "content": response_text, "meta": meta
                 })
@@ -333,7 +380,97 @@ with tab_tasks:
         st.dataframe(tasks_df, use_container_width=True, hide_index=True)
         st.caption(f"Total tasks: **{len(tasks_df)}**")
 
-# ── TAB 5: DEBUG TRACE ──────────────────────────────────────────────────────
+# ── TAB 5: COST ANALYTICS ───────────────────────────────────────────────────
+with tab_costs:
+    st.markdown("### 💰 Cost & Token Analytics")
+    st.caption("Real-time token consumption and API cost tracking for every prompt.")
+
+    col_r, _ = st.columns([1, 3])
+    with col_r:
+        if st.button("🔄 Refresh", key="refresh_costs"):
+            st.rerun()
+
+    # ── Session summary cards ────────────────────────────────────────────
+    st.markdown("#### 📊 This Session")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Tokens Used",   f"{st.session_state.session_tokens:,}")
+    c2.metric("Total Cost",          f"${st.session_state.session_cost:.6f}")
+    c3.metric("Messages Sent",       str(sum(1 for m in st.session_state.messages if m["role"] == "user")))
+
+    # ── Budget progress bar ──────────────────────────────────────────────
+    BUDGET_USD = 1.0   # configurable budget cap in USD
+    budget_pct = min(st.session_state.session_cost / BUDGET_USD, 1.0)
+    bar_color  = "normal" if budget_pct < 0.7 else "inverse"
+    st.markdown(f"**💳 Session Budget** (cap: ${BUDGET_USD:.2f})")
+    st.progress(budget_pct)
+    if budget_pct >= 0.9:
+        st.warning("⚠️ Approaching session budget cap!")
+
+    st.divider()
+
+    # ── Historical cost data from backend ────────────────────────────────
+    st.markdown("#### 📜 Full Cost History (from DB)")
+    analytics_resp = api_get("/analytics/costs", params={"tenant_id": tenant_id, "user_id": user_id})
+
+    if analytics_resp and analytics_resp.status_code == 200:
+        analytics_data = analytics_resp.json()
+        summary        = analytics_data.get("summary", {})
+        records        = analytics_data.get("records", [])
+
+        # Lifetime summary cards
+        lc1, lc2, lc3, lc4 = st.columns(4)
+        lc1.metric("📨 Total Messages",    str(summary.get("message_count", 0)))
+        lc2.metric("🔢 Lifetime Tokens",   f"{summary.get('total_tokens', 0):,}")
+        lc3.metric("↑ Prompt Tokens",      f"{summary.get('total_prompt_tokens', 0):,}")
+        lc4.metric("↓ Completion Tokens",  f"{summary.get('total_completion_tokens', 0):,}")
+
+        st.markdown(
+            f"""
+            <div style="
+                background:linear-gradient(135deg,#1e2140,#252a45);
+                border:1px solid #3d4270; border-radius:10px;
+                padding:16px 24px; margin:12px 0; text-align:center;
+            ">
+                <span style='font-size:1.6rem; font-weight:700; color:#4ade80'>
+                    💵 Lifetime Cost: ${summary.get('total_cost_usd', 0.0):.6f}
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if records:
+            cost_df = pd.DataFrame(records)
+            cost_df["cost_usd"] = cost_df["cost_usd"].apply(lambda x: f"${x:.6f}")
+            cost_df = cost_df.rename(columns={
+                "model_name":         "Model",
+                "prompt_tokens":      "↑ Prompt",
+                "completion_tokens":  "↓ Completion",
+                "total_tokens":       "Total Tokens",
+                "cost_usd":           "Cost (USD)",
+                "created_at":         "Timestamp",
+            })
+            st.dataframe(
+                cost_df[["Timestamp", "Model", "↑ Prompt", "↓ Completion", "Total Tokens", "Cost (USD)"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Daily cost bar chart
+            st.markdown("#### 📅 Token Usage by Message")
+            chart_raw = analytics_data["records"]
+            if chart_raw:
+                chart_df = pd.DataFrame(chart_raw)[["created_at", "total_tokens"]].copy()
+                chart_df["created_at"] = pd.to_datetime(chart_df["created_at"]).dt.strftime("%m-%d %H:%M")
+                chart_df = chart_df.set_index("created_at")
+                st.bar_chart(chart_df, color="#7c3aed")
+        else:
+            st.info("No cost history yet. Send a message to start tracking!")
+    else:
+        st.warning("Could not load cost history. Is the backend running?")
+
+
+# ── TAB 6: DEBUG TRACE ──────────────────────────────────────────────────────
 with tab_debug:
     st.markdown("### 🔍 Agent Debug Trace")
     st.caption("Step-by-step execution log of the last agent run.")

@@ -1,3 +1,10 @@
+"""
+app/email/email_service.py
+
+Uses the LLM to draft professional emails and stages them as pending approvals in the DB.
+"""
+
+# Drafts emails based on document context. Also saves to SQLite for approval.
 import logging
 from typing import Dict, Any
 from pydantic import BaseModel, Field, field_validator

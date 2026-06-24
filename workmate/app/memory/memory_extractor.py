@@ -1,3 +1,10 @@
+"""
+app/memory/memory_extractor.py
+
+A background service that uses the LLM to extract facts, preferences, and events from chat history.
+"""
+
+# Analyzes chat history to find user preferences (e.g., "I prefer Python") and saves them.
 import logging
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field

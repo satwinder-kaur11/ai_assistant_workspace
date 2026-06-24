@@ -1,3 +1,10 @@
+"""
+app/memory/memory_retriever.py
+
+Searches the ChromaDB vector store to recall relevant past memories when answering a user query.
+"""
+
+# Fetches past memories to give the agent context about the user.
 import logging
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session

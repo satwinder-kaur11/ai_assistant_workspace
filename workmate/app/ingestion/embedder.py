@@ -1,3 +1,9 @@
+"""
+app/ingestion/embedder.py
+
+Converts chunks of text into mathematical vectors (embeddings) using SentenceTransformers.
+"""
+
 from app.config import settings
 import logging
 

@@ -1,3 +1,9 @@
+"""
+app/memory/memory_store.py
+
+Handles saving extracted memories into the SQLite database.
+"""
+
 from sqlalchemy.orm import Session
 from app.db.models import Memory, MemoryType
 from typing import List, Optional

@@ -1,3 +1,11 @@
+"""
+app/rag/rag_service.py
+
+Retrieval-Augmented Generation service. Searches ChromaDB for relevant document chunks 
+based on the user's query.
+"""
+
+# Searches ChromaDB for chunks matching the user's query.
 import logging
 from typing import List, Dict, Any, Tuple
 from app.vectorstore.chroma_client import get_document_collection

@@ -1,3 +1,9 @@
+"""
+app/ingestion/loaders.py
+
+Parses raw text out of uploaded files (PDFs, DOCX, TXT).
+"""
+
 import os
 import PyPDF2
 import docx

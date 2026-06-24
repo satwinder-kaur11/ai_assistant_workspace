@@ -1,3 +1,11 @@
+"""
+app/agent/llm_factory.py
+
+A utility class that checks the environment variables and returns either the Claude 
+or Ollama LLM client.
+"""
+
+# A helper that returns either an Anthropic or Ollama LLM client based on the configuration.
 import logging
 from app.config import settings
 

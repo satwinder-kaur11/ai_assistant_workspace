@@ -1,4 +1,11 @@
+"""
+app/tasks/task_service.py
 
+Uses the LLM to extract actionable tasks from text and stages them as pending approvals in the DB.
+"""
+
+#  Extracts action items from text/documents. 
+# Instead of creating them directly, it saves an ActionLog to SQLite for human approval.
 import logging
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field, model_validator

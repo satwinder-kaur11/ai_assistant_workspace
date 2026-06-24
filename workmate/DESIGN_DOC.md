@@ -18,6 +18,9 @@ The architecture utilizes two distinct databases to handle different types of da
 **Local-First & Privacy-Centric Design**
 Enterprise AI adoption is heavily bottlenecked by data privacy concerns. The architecture was specifically designed to support local, air-gapped execution. By supporting local embeddings (`SentenceTransformers`) and local LLM inference (`Ollama`), users can process highly sensitive internal documents without sending data to third-party cloud providers like OpenAI or Anthropic.
 
+**Observability & Cost Optimization (Token Tracking)**
+To run AI in production, knowing *what* the model said is only half the battle; knowing *how much it cost* is the other half. I implemented a custom `token_counter.py` that intercepts the LangGraph state at the final node, parses the exact prompt and completion tokens used, calculates the live USD cost based on the model pricing, and stores it in a `TokenUsage` SQLite table. This enables the Streamlit "Cost Analytics" dashboard to prevent runaway API billing.
+
 ---
 
 ## 2. Trade-offs
@@ -55,7 +58,12 @@ The current RAG pipeline uses standard text extraction (`PyPDF2`), which often d
 While the database schema natively supports `tenant_id` to separate data between organizations, the current prototype assumes these IDs are passed harmlessly from the frontend. For production, the FastAPI backend must be secured behind an Identity Provider (Auth0, AWS Cognito, etc.). The `user_id` and `tenant_id` must be cryptographically extracted and verified from incoming JWT (JSON Web Tokens) headers to prevent privilege escalation.
 
 **Asynchronous Task Queues**
-Operations like document embedding (chunking large PDFs and writing to ChromaDB) and background memory extraction are currently handled using FastAPI's lightweight `BackgroundTasks`. In a production environment with heavy traffic, these CPU-intensive operations would block API workers. They must be offloaded to a dedicated distributed task queue (such as Celery with RabbitMQ, or Redis Queue) running on separate worker nodes.
+Operations like document embedding (chunking large PDFs and writing to ChromaDB) and background memory extraction are currently handled using FastAPI's lightweight `BackgroundTasks`. In a production environment scaling to **100,000 users and 10 million documents**, these CPU-intensive operations would immediately block API workers. They must be offloaded to a dedicated distributed task queue (such as **Celery with RabbitMQ**, or Redis Queue) running on separate worker nodes capable of horizontal autoscaling.
 
-**Enterprise Observability**
-While the prototype includes basic `@trace_node` logging for debugging, a production AI system requires deep, token-level observability. The LangGraph orchestration must be hooked into an enterprise telemetry system (like LangSmith or Datadog) to monitor LLM hallucination rates, exact token costs per tenant, and latency bottlenecks at the granular node level.
+**Storage & Database Scaling**
+To handle **50 million memory records**, the local database architecture must evolve. 
+1. The local SQLite database will be migrated to a managed **PostgreSQL** instance (e.g., AWS RDS) to handle high concurrent writes.
+2. The local ChromaDB instance will be migrated to a managed vector store designed for massive scale, such as **Pinecone** or **Qdrant Cloud**.
+
+**Enterprise Observability & Evaluation**
+While the prototype includes basic `@trace_node` logging for debugging, a production AI system requires deep observability. The LangGraph orchestration must be hooked into an enterprise telemetry system (like LangSmith or Datadog) to monitor LLM hallucination rates, exact token costs per tenant, and latency bottlenecks. Furthermore, "Agent Evaluation" metrics (like measuring the success rate of the HITL task extraction) must be automated using LLM-as-a-judge pipelines.

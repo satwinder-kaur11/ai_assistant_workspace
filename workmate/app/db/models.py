@@ -1,3 +1,10 @@
+"""
+app/db/models.py
+
+Defines the database schema using SQLAlchemy ORM classes (Users, Documents, ActionLogs, TokenUsage).
+"""
+
+#  Defines the SQLite schema (Users, Tenants, Memories, ActionLogs).
 from datetime import datetime, timezone
 import enum
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Float, JSON, Enum, Boolean
@@ -137,4 +144,20 @@ class AgentTrace(Base):
     output_json = Column(JSON)
     latency_ms = Column(Float)
     tokens_used = Column(Integer)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class TokenUsage(Base):
+    """Tracks token consumption and cost per chat message."""
+    __tablename__ = "token_usage"
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=True)
+    model_name = Column(String, default="rule-based")   # e.g. claude-3-5-sonnet, llama3, rule-based
+    prompt_tokens = Column(Integer, default=0)
+    completion_tokens = Column(Integer, default=0)
+    total_tokens = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)               # computed cost in US dollars
     created_at = Column(DateTime, default=utcnow)

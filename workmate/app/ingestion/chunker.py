@@ -1,3 +1,9 @@
+"""
+app/ingestion/chunker.py
+
+Splits large parsed documents into smaller, 1000-character chunks using LangChain text splitters.
+"""
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import settings
 from typing import List

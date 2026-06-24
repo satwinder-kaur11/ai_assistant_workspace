@@ -1,7 +1,9 @@
 """
-Observability: wraps every LangGraph node to capture latency, token estimates,
-input/output snapshots, and persist them to the AgentTrace table.
+app/observability/tracing.py
+
+Provides decorators that measure the latency and execution time of LangGraph nodes for the Debug Trace UI.
 """
+
 import time
 import logging
 import json

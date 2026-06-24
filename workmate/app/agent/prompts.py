@@ -1,6 +1,7 @@
 """
-Centralized system prompts for the WorkMate agent.
-All prompts live here — never scattered across node files.
+app/agent/prompts.py
+
+Stores the raw text prompts and system instructions sent to the LLM (e.g., Intent Detection Prompt).
 """
 
 INTENT_DETECTION_PROMPT = """\

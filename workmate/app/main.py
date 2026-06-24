@@ -1,7 +1,10 @@
 """
-FastAPI entrypoint for WorkMate.
-Handles document upload, chat, and HITL action approval endpoints.
+app/main.py
+
+The core FastAPI backend server. It defines the REST API endpoints (/chat, /upload, /costs)
+and manages background tasks for document parsing and memory extraction.
 """
+
 import os
 import sys
 import uuid
@@ -14,14 +17,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-# ── ensure project root is on sys.path ─────────────────────────────────────
+#ensure project root is on sys.path 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from app.db.session import get_db
 from app.db.init_db import init_db
-from app.db.models import Document, Conversation, Message, MemoryType, ActionLog
+from app.db.models import Document, Conversation, Message, MemoryType, ActionLog, TokenUsage
 from app.agent.graph import build_graph
 from app.ingestion.loaders import parse_document
 from app.ingestion.chunker import chunk_text
@@ -30,6 +33,7 @@ from app.vectorstore.chroma_client import get_document_collection, get_memory_co
 from app.safety.guardrails import get_pending_actions, approve_action, reject_action
 from app.memory.memory_extractor import extract_memories
 from app.memory.memory_store import create_memory
+from app.observability.token_counter import calculate_cost
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +41,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Build the agent graph once at startup ──────────────────────────────────
+# Build the agent graph once at startup 
 agent_graph = None
 
 
@@ -62,7 +66,7 @@ app.add_middleware(
 )
 
 
-# ── Request/Response models ────────────────────────────────────────────────
+#Request/Response models 
 
 class ChatRequest(BaseModel):
     tenant_id: int = 1
@@ -78,10 +82,15 @@ class ChatResponse(BaseModel):
     confidence: Optional[float] = None
     reasoning: Optional[str] = None
     rag_confidence: Optional[str] = None
+    # Token usage & cost
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+    model_name: str = "rule-based"
 
 
-# ── Background helpers ─────────────────────────────────────────────────────
-
+#  Background helpers 
 def _process_document_bg(document_id: int, tenant_id: int, user_id: Optional[int], raw_path: str):
     """Parse → chunk → embed → store in Chroma. Runs in background."""
     db = next(get_db())
@@ -263,7 +272,7 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, db: Session 
     db.commit()
     db.refresh(u_msg)
 
-    # Build initial state as plain dict (TypedDict compatible)
+    # Initialise token_usage in state
     initial_state = {
         "tenant_id": req.tenant_id,
         "user_id": req.user_id,
@@ -283,6 +292,7 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, db: Session 
         "validation_passed": True,
         "error_message": None,
         "final_response": "",
+        "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "model_name": "rule-based"},
     }
 
     # Run the agent
@@ -294,10 +304,40 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, db: Session 
 
     response_text = final_state.get("final_response") or "I'm sorry, I couldn't generate a response."
 
+    # ── Extract & persist token usage ──────────────────────────────────────
+    raw_usage = final_state.get("token_usage") or {}
+    prompt_tokens     = int(raw_usage.get("prompt_tokens", 0))
+    completion_tokens = int(raw_usage.get("completion_tokens", 0))
+    total_tokens      = prompt_tokens + completion_tokens
+    model_name        = raw_usage.get("model_name", "rule-based")
+    cost_usd          = calculate_cost(prompt_tokens, completion_tokens, model_name)
+
     # Persist assistant message
     a_msg = Message(conversation_id=conv_id, role="assistant", content=response_text)
     db.add(a_msg)
     db.commit()
+
+    # Save token usage row
+    try:
+        usage_row = TokenUsage(
+            tenant_id=req.tenant_id,
+            user_id=req.user_id,
+            conversation_id=conv_id,
+            message_id=a_msg.id,
+            model_name=model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
+        db.add(usage_row)
+        db.commit()
+        logger.info(
+            f"Token usage — prompt: {prompt_tokens}, completion: {completion_tokens}, "
+            f"cost: ${cost_usd:.6f}, model: {model_name}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to save token usage: {e}")
 
     # Extract memories in background
     background_tasks.add_task(
@@ -312,6 +352,11 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, db: Session 
         confidence=final_state.get("confidence"),
         reasoning=final_state.get("reasoning"),
         rag_confidence=final_state.get("rag_confidence"),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cost_usd=cost_usd,
+        model_name=model_name,
     )
 
 
@@ -387,3 +432,47 @@ def list_documents(tenant_id: int = 1, db: Session = Depends(get_db)):
         }
         for d in docs
     ]
+
+
+@app.get("/analytics/costs")
+def get_cost_analytics(tenant_id: int = 1, user_id: int = 1, db: Session = Depends(get_db)):
+    """
+    Return per-message token usage and cost history for the given tenant/user.
+    Also returns aggregate totals so the frontend can display summary cards.
+    """
+    rows = (
+        db.query(TokenUsage)
+        .filter(TokenUsage.tenant_id == tenant_id, TokenUsage.user_id == user_id)
+        .order_by(TokenUsage.created_at.desc())
+        .limit(200)
+        .all()
+    )
+
+    records = [
+        {
+            "id": r.id,
+            "model_name": r.model_name,
+            "prompt_tokens": r.prompt_tokens,
+            "completion_tokens": r.completion_tokens,
+            "total_tokens": r.total_tokens,
+            "cost_usd": r.cost_usd,
+            "created_at": str(r.created_at),
+        }
+        for r in rows
+    ]
+
+    total_prompt     = sum(r["prompt_tokens"]     for r in records)
+    total_completion = sum(r["completion_tokens"] for r in records)
+    total_tokens     = sum(r["total_tokens"]      for r in records)
+    total_cost       = round(sum(r["cost_usd"]    for r in records), 8)
+
+    return {
+        "records": records,
+        "summary": {
+            "total_prompt_tokens":     total_prompt,
+            "total_completion_tokens": total_completion,
+            "total_tokens":            total_tokens,
+            "total_cost_usd":          total_cost,
+            "message_count":           len(records),
+        },
+    }

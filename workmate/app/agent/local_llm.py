@@ -1,13 +1,9 @@
 """
-Local fallback engine for WorkMate.
-When no ANTHROPIC_API_KEY is set, this rule-based system handles:
-  - Intent classification
-  - Response generation (chitchat, RAG, memory recall)
-  - Task extraction from text
-  - Email draft composition
-  - Memory extraction
-No API keys or internet connection required.
+app/agent/local_llm.py
+
+The fallback rule-based matching engine used if no external API keys are provided or if the network fails.
 """
+
 import re
 import json
 import logging

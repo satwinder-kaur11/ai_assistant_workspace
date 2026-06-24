@@ -4,7 +4,8 @@ WorkMate is a production-quality, scoped prototype for an AI Workspace Assistant
 
 ## Architectures
 
-> **Note:** The system has been upgraded to a **Multi-Agent Supervisor Architecture**. Below are the core diagrams. For the full set of 8 diagrams (including Memory, Safety, and Observability), please see [**ARCHITECTURE.md**](./ARCHITECTURE.md).
+> **v3:** Multi-Agent Supervisor with fault-tolerant retry loop and exponential backoff.
+> For the full set of **10 diagrams**, see [**ARCHITECTURE.md**](./ARCHITECTURE.md).
 
 ### 1. Full System Architecture
 ```mermaid
@@ -14,6 +15,7 @@ graph TD
     classDef super     fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#fff
     classDef agent     fill:#2563eb,stroke:#1d4ed8,stroke-width:2px,color:#fff
     classDef shared    fill:#0891b2,stroke:#0e7490,stroke-width:2px,color:#fff
+    classDef retry     fill:#dc2626,stroke:#b91c1c,stroke-width:2px,color:#fff
     classDef db        fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff
     classDef llm       fill:#ef4444,stroke:#b91c1c,stroke-width:2px,color:#fff
 
@@ -22,47 +24,55 @@ graph TD
     API[FastAPI Backend]:::backend
 
     subgraph "LangGraph Multi-Agent Orchestrator"
-        SUP[Supervisor Agent\nRoutes query to sub-agent]:::super
-
-        subgraph "Specialist Sub-Agents"
-            RA[Research Agent\nDocument QA + Memory Recall]:::agent
-            PA[Productivity Agent\nTask Creation + Email Draft]:::agent
-        end
-
-        VAL[Validation Node]:::shared
+        SUP[Supervisor Agent]:::super
+        RA[Research Agent\nBackoff: 1s-2s-4s]:::agent
+        PA[Productivity Agent\nBackoff: 1s-2s-4s]:::agent
+        VAL[Validation]:::shared
         RES[Response Generation]:::shared
+        ERR[Error Handling\nRetry Counter]:::retry
     end
 
-    SQLite[(SQLite\nLogs + Memory + Actions)]:::db
-    Chroma[(ChromaDB\nVector Search)]:::db
-    LLM{{LLM Engine\nOllama / Anthropic}}:::llm
+    SQLite[(SQLite)]:::db
+    Chroma[(ChromaDB)]:::db
+    LLM{{LLM Engine}}:::llm
 
     User --> UI --> API --> SUP
     SUP -->|document_qa / memory_recall| RA
     SUP -->|task_creation / email_draft| PA
     SUP -->|chitchat| VAL
-
     RA --> VAL
     PA --> VAL
-    VAL --> RES
+    VAL -->|ok| RES
+    VAL -->|error| ERR
+    ERR -->|retries left| SUP
+    ERR -->|exhausted| RES
     RES --> API --> UI --> User
+    RA <--> Chroma
+    PA --> SQLite
+    SUP -.-> LLM
+    RES -.-> LLM
 ```
 
-### 2. Multi-Agent Supervisor Decision Flow
+### 2. Fault-Tolerant Retry Flow
 ```mermaid
 flowchart TD
-    Q([User Query]) --> PRE{Local Pre-Check\nConfidence >= 82pct?}
+    SUP[Supervisor] --> SA[Sub-Agent]
 
-    PRE -->|YES — task or email\nkeyword matched| SKIP[Skip LLM\nRoute directly]
-    PRE -->|NO — ambiguous query| LLM[Ask LLM\nOllama or Anthropic]
+    subgraph "Internal Backoff"
+        SA --> A1{Attempt 1}
+        A1 -->|Fail - wait 1s| A2{Attempt 2}
+        A2 -->|Fail - wait 2s| A3{Attempt 3}
+        A3 -->|Fail - wait 4s| ERR
+        A1 -->|OK| VAL
+        A2 -->|OK| VAL
+        A3 -->|OK| VAL
+    end
 
-    SKIP --> PA[productivity_agent]
-    LLM --> PARSE[Parse plain-text\nLLM response]
-
-    PARSE --> RA[research_agent]
-    PARSE --> PA
-    PARSE --> CA[chitchat — direct\nto validation]
+    ERR[error_handling\nretry_count++] -->|retries left\nclear state| SUP
+    ERR -->|exhausted| END([Final Error])
+    VAL[Validation] --> RES[Response]
 ```
+
 
 ## Setup Instructions
 
